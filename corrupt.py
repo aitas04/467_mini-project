@@ -60,7 +60,7 @@ for s1, s2, label in zip(label_1_s1, label_2_s2, preds):
         acc_label_1_s1.append(s1)
         acc_label_2_s2.append(s2)
 
-def get_similar_nouns(word, topn=50, threshold=0.6):
+def get_similar_nouns(word, topn=50, threshold=0.65):
     if word not in en_model.key_to_index:
         return []
 
