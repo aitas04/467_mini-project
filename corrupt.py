@@ -52,8 +52,8 @@ enc = tokenizer(label_1_s1,label_2_s2,truncation=True,padding=True,max_length=12
 with torch.no_grad():
     preds = model(**enc).logits.argmax(dim=-1).cpu().tolist()
 
-acc_label_1_s1 = label_1_s1.copy()
-acc_label_2_s2 = label_2_s2.copy()
+acc_label_1_s1 = ()
+acc_label_2_s2 = ()
 
 for s1, s2, label in zip(label_1_s1, label_2_s2, preds):
     if label == 1:
