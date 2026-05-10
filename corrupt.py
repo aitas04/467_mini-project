@@ -52,49 +52,66 @@ enc = tokenizer(label_1_s1,label_2_s2,truncation=True,padding=True,max_length=12
 with torch.no_grad():
     preds = model(**enc).logits.argmax(dim=-1).cpu().tolist()
 
-acc_label_1_s1 = label_1_s1
-acc_label_2_s2 = label_2_s2
+acc_label_1_s1 = label_1_s1.copy()
+acc_label_2_s2 = label_2_s2.copy()
 
 for s1, s2, label in zip(label_1_s1, label_2_s2, preds):
     if label == 1:
         acc_label_1_s1.append(s1)
         acc_label_2_s2.append(s2)
 
-def replace(word, target_score=0.7):
+def get_similar_nouns(word, topn=50, threshold=0.6):
     if word not in en_model.key_to_index:
+        return []
+
+    candidates = en_model.most_similar(word, topn=topn)
+    words = [w for w, _ in candidates]
+
+    docs = nlp.pipe(words, batch_size=16)
+
+    filtered = []
+    for doc, (w, score) in zip(docs, candidates):
+        if len(doc) > 0 and doc[0].pos_ == "NOUN" and score >= threshold:
+            filtered.append((w, score))
+
+    return filtered
+
+
+def replace(word, target_score=0.7):
+    candidates = get_similar_nouns(word)
+
+    if not candidates:
         return word
-    
-    orig_pos = nlp(word)[0].pos_
-    candidates = en_model.most_similar(word, topn=50)
-    
+
     best_word = word
     best_diff = float("inf")
-    
+
     for w, score in candidates:
-        doc = nlp(w)
-        if len(doc) > 0 and doc[0].pos_ == orig_pos:
-            diff = abs(score - target_score)
-            if diff < best_diff:
-                best_diff = diff
-                best_word = w
-    
+        diff = abs(score - target_score)
+        if diff < best_diff:
+            best_diff = diff
+            best_word = w
+
     return best_word
 
-def corrupt(s1, s2):
+def corrupt(s2):
     doc = nlp(s2)
     new_tokens = [token.text for token in doc]
+
     for token in doc:
         if token.pos_ in ["NOUN", "VERB"]:
             replacement = replace(token.text)
             if replacement != token.text:
                 new_tokens[token.i] = replacement
-                break 
+                break
+
     return " ".join(new_tokens)
 
 corrupt_s1 = []
 corrupt_s2 = []
+
 for s1, s2 in zip(acc_label_1_s1, acc_label_2_s2):
-    c2 = corrupt(s1, s2) 
+    c2 = corrupt(s2)
     corrupt_s1.append(s1)
     corrupt_s2.append(c2)
 
@@ -109,9 +126,7 @@ proportion = round(correct_0 / len(corrupt_preds) * 100, 2)
 
 print(f"correctly labeled: {correct_0}/{len(corrupt_preds)} = {proportion}%")
 
-print(test_preds[:10])
-print(test_labels[:10])
-print(type(test_labels[0]))
+
 plt.bar(
     ["Test Set Accuracy", "Corrupted Pairs (labeled 0)"],
     [test_acc, proportion]
@@ -129,3 +144,4 @@ plt.title("Model Performance on Corrupted Paraphrase Pairs")
 plt.ylabel("Number of samples")
 plt.savefig("corruption_performance.png")
 plt.close()
+
