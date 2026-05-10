@@ -37,6 +37,7 @@ model_name = "roberta_model"
 device = "cpu"
 print(f"Using device: {device}")
 
+# Add this debug block before the model eval
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2).to(device)
@@ -52,59 +53,50 @@ enc = tokenizer(label_1_s1,label_2_s2,truncation=True,padding=True,max_length=12
 with torch.no_grad():
     preds = model(**enc).logits.argmax(dim=-1).cpu().tolist()
 
-acc_label_1_s1 = ()
-acc_label_2_s2 = ()
+acc_label_1_s1 = []
+acc_label_2_s2 = []
 
 for s1, s2, label in zip(label_1_s1, label_2_s2, preds):
     if label == 1:
         acc_label_1_s1.append(s1)
         acc_label_2_s2.append(s2)
 
-def get_similar_nouns(word, topn=50, threshold=0.65):
-    if word not in en_model.key_to_index:
+def similar(word, pos, topn=200, threshold=0.65):
+    if word.lower() not in en_model.key_to_index:
         return []
-
-    candidates = en_model.most_similar(word, topn=topn)
-    words = [w for w, _ in candidates]
-
-    docs = nlp.pipe(words, batch_size=16)
-
+    original_lemma = nlp(word.lower())[0].lemma_
+    candidates = en_model.most_similar(word.lower(), topn=topn)
+    docs = nlp.pipe([w for w, _ in candidates], batch_size=16)
     filtered = []
     for doc, (w, score) in zip(docs, candidates):
-        if len(doc) > 0 and doc[0].pos_ == "NOUN" and score >= threshold:
+        if len(doc) == 0:
+            continue
+        token = doc[0]
+        if (token.pos_ == pos
+            and score >= threshold
+            and w.lower() != word.lower()
+            and token.lemma_ != original_lemma
+            and "_" not in w):
             filtered.append((w, score))
-
     return filtered
 
 
-def replace(word, target_score=0.7):
-    candidates = get_similar_nouns(word)
-
+def replace(word, pos, target_score=0.3):
+    candidates = similar(word, pos)
     if not candidates:
         return word
+    return min(candidates, key=lambda x: abs(x[1] - target_score))[0]
 
-    best_word = word
-    best_diff = float("inf")
-
-    for w, score in candidates:
-        diff = abs(score - target_score)
-        if diff < best_diff:
-            best_diff = diff
-            best_word = w
-
-    return best_word
 
 def corrupt(s2):
     doc = nlp(s2)
     new_tokens = [token.text for token in doc]
-
     for token in doc:
         if token.pos_ in ["NOUN", "VERB"]:
-            replacement = replace(token.text)
+            replacement = replace(token.text, token.pos_)
             if replacement != token.text:
                 new_tokens[token.i] = replacement
                 break
-
     return " ".join(new_tokens)
 
 corrupt_s1 = []
@@ -117,7 +109,13 @@ for s1, s2 in zip(acc_label_1_s1, acc_label_2_s2):
 
 
 corrupt_enc = tokenizer(corrupt_s1,corrupt_s2,truncation=True,padding=True,max_length=128,return_tensors="pt").to(device)
-
+print("\nSample corruptions:")
+for s1, s2_orig, s2_corr in zip(corrupt_s1[:10], acc_label_2_s2[:10], corrupt_s2[:10]):
+    changed = "CHANGED" if s2_orig != s2_corr else "UNCHANGED"
+    print(f"  [{changed}]")
+    print(f"    orig : {s2_orig}")
+    print(f"    corr : {s2_corr}")
+    print()
 with torch.no_grad():
     corrupt_preds = model(**corrupt_enc).logits.argmax(dim=-1).cpu().tolist()
 
