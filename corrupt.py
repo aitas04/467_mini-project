@@ -9,6 +9,7 @@ from sklearn.metrics import accuracy_score
 import spacy
 import gensim.downloader as api
 
+
 nlp = spacy.load("en_core_web_sm")
 en_model = api.load("word2vec-google-news-300")
 
@@ -37,7 +38,7 @@ model_name = "roberta_model"
 device = "cpu"
 print(f"Using device: {device}")
 
-# Add this debug block before the model eval
+
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2).to(device)
@@ -61,43 +62,47 @@ for s1, s2, label in zip(label_1_s1, label_2_s2, preds):
         acc_label_1_s1.append(s1)
         acc_label_2_s2.append(s2)
 
-def similar(word, pos, topn=200, threshold=0.65):
+
+
+def similar(word, pos, topn=200):
     if word.lower() not in en_model.key_to_index:
         return []
     original_lemma = nlp(word.lower())[0].lemma_
-    candidates = en_model.most_similar(word.lower(), topn=topn)
+    target = 0.7 if pos == "NOUN" else 0.3
+    tolerance = 0.1
+
+    candidates = en_model.most_similar(word.lower(), topn=int(topn))
     docs = nlp.pipe([w for w, _ in candidates], batch_size=16)
     filtered = []
     for doc, (w, score) in zip(docs, candidates):
         if len(doc) == 0:
             continue
         token = doc[0]
-        if (token.pos_ == pos
-            and score >= threshold
-            and w.lower() != word.lower()
-            and token.lemma_ != original_lemma
-            and "_" not in w):
+        if (token.pos_ == pos and w.lower() != word.lower() and token.lemma_ != original_lemma and "_" not in w and w.isalpha() and w == w.lower() and abs(score - target) <= tolerance):
             filtered.append((w, score))
     return filtered
 
-
-def replace(word, pos, target_score=0.3):
+def replace(word, pos):
     candidates = similar(word, pos)
     if not candidates:
         return word
-    return min(candidates, key=lambda x: abs(x[1] - target_score))[0]
+    return min(candidates, key=lambda x: abs(x[1] - 0.7))[0]
+
+
 
 
 def corrupt(s2):
     doc = nlp(s2)
     new_tokens = [token.text for token in doc]
     for token in doc:
-        if token.pos_ in ["NOUN", "VERB"]:
-            replacement = replace(token.text, token.pos_)
-            if replacement != token.text:
-                new_tokens[token.i] = replacement
+         if token.pos_ in ["NOUN", "VERB"]:
+            candidates = similar(token.text, token.pos_)
+            if candidates:
+                worst = min(candidates, key=lambda x: x[1])
+                new_tokens[token.i] = worst[0]
                 break
     return " ".join(new_tokens)
+
 
 corrupt_s1 = []
 corrupt_s2 = []
@@ -109,13 +114,6 @@ for s1, s2 in zip(acc_label_1_s1, acc_label_2_s2):
 
 
 corrupt_enc = tokenizer(corrupt_s1,corrupt_s2,truncation=True,padding=True,max_length=128,return_tensors="pt").to(device)
-print("\nSample corruptions:")
-for s1, s2_orig, s2_corr in zip(corrupt_s1[:10], acc_label_2_s2[:10], corrupt_s2[:10]):
-    changed = "CHANGED" if s2_orig != s2_corr else "UNCHANGED"
-    print(f"  [{changed}]")
-    print(f"    orig : {s2_orig}")
-    print(f"    corr : {s2_corr}")
-    print()
 with torch.no_grad():
     corrupt_preds = model(**corrupt_enc).logits.argmax(dim=-1).cpu().tolist()
 
